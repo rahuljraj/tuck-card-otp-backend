@@ -50,7 +50,7 @@ module.exports = async (req, res) => {
     const { data: user, error: userError } = await supabase
       .from(role === 'admin' ? 'admins' : 'users')
       .select('*')
-      .eq('phone', phone)
+      .eq('phone_number', phone) 
       .single();
 
     if (userError || !user) {
