@@ -1,5 +1,4 @@
 const twilio = require('twilio');
-const jwt = require('jsonwebtoken');
 const { createClient } = require('@supabase/supabase-js');
 
 const supabase = createClient(
@@ -33,7 +32,7 @@ module.exports = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid OTP' });
     }
 
-    // ✅ Step 2: Role-based validation for "user"
+    // ✅ Step 2: Role-based validation (only for 'user')
     if (role === 'user') {
       const { data, error } = await supabase
         .from('users')
@@ -46,42 +45,33 @@ module.exports = async (req, res) => {
       }
     }
 
-    // ✅ Step 3: Fetch user from role-specific table
-    const { data: user, error: userError } = await supabase
-      .from(role === 'admin' ? 'admins' : 'users')
-      .select('*')
-      .eq('phone_number', phone) 
-      .single();
+    // ✅ Step 3: Authenticate with Supabase Auth to get full session
+    const { data: sessionData, error: sessionError } = await supabase.auth.verifyOtp({
+      type: 'sms',
+      phone,
+      token: code,
+    });
 
-    if (userError || !user) {
-      return res.status(401).json({
+    if (sessionError || !sessionData?.session) {
+      return res.status(400).json({
         success: false,
-        message: 'User not found in Supabase for this role',
-        error: userError?.message || 'Not found'
+        message: 'OTP verification failed via Supabase',
+        error: sessionError?.message || 'Unknown error',
       });
     }
 
-    // ✅ Step 4: Manually generate access token
-    const accessToken = jwt.sign(
-      {
-        sub: user.id,
-        role: 'authenticated',
-        phone: user.phone
-      },
-      process.env.SUPABASE_JWT_SECRET,
-      { expiresIn: '1h' }
-    );
-
-    // ✅ Step 5: Send back session
+    // ✅ Step 4: Return full session (access + refresh token)
     return res.status(200).json({
       success: true,
       message: 'OTP verified successfully',
       session: {
-        access_token: accessToken,
-        token_type: 'bearer'
+        access_token: sessionData.session.access_token,
+        refresh_token: sessionData.session.refresh_token,
+        token_type: sessionData.session.token_type,
       },
-      user: user
+      user: sessionData.user,
     });
+
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
   }
