@@ -1,9 +1,10 @@
 const twilio = require('twilio');
+const jwt = require('jsonwebtoken');
 const { createClient } = require('@supabase/supabase-js');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 const client = twilio(
@@ -32,7 +33,7 @@ module.exports = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid OTP' });
     }
 
-    // ✅ Step 2: Role-based validation (only for 'user')
+    // ✅ Step 2: Role-based validation for "user"
     if (role === 'user') {
       const { data, error } = await supabase
         .from('users')
@@ -45,34 +46,54 @@ module.exports = async (req, res) => {
       }
     }
 
-    // ✅ Step 3: Authenticate with Supabase Auth to get full session
-    const { data: sessionData, error: sessionError } = await supabase.auth.verifyOtp({
-      type: 'sms',
-      phone,
-      token: code,
-    });
+    // ✅ Step 3: Fetch user from role-specific table
+    const { data: user, error: userError } = await supabase
+      .from(role === 'admin' ? 'admins' : 'users')
+      .select('*')
+      .eq('phone_number', phone)
+      .single();
 
-    if (sessionError || !sessionData?.session) {
-      return res.status(400).json({
+    if (userError || !user) {
+      return res.status(401).json({
         success: false,
-        message: 'OTP verification failed via Supabase',
-        error: sessionError?.message || 'Unknown error',
+        message: 'User not found in Supabase for this role',
+        error: userError?.message || 'Not found'
       });
     }
 
-    // ✅ Step 4: Return full session (access + refresh token)
+    // ✅ Step 4: Generate custom JWT token using Supabase JWT secret
+    const accessToken = jwt.sign(
+      {
+        sub: user.id,
+        role: 'authenticated',
+        phone: user.phone_number
+      },
+      process.env.SUPABASE_JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    // ✅ Step 5: Return session
     return res.status(200).json({
       success: true,
       message: 'OTP verified successfully',
       session: {
-        access_token: sessionData.session.access_token,
-        refresh_token: sessionData.session.refresh_token,
-        token_type: sessionData.session.token_type,
+        access_token: accessToken,
+        token_type: 'bearer'
+        // Optionally: include refresh_token if you implement it later
       },
-      user: sessionData.user,
+      user: {
+        id: user.id,
+        phone_number: user.phone_number,
+        created_at: user.created_at
+      }
     });
 
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
+    console.error('Error during OTP verification:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'OTP verification failed via Supabase',
+      error: error.message || 'Internal Server Error'
+    });
   }
 };
