@@ -7,6 +7,10 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
+console.log('supabaseAdmin client created.');
+// Log a portion of the supabaseAdmin object to see if auth.admin exists
+console.log('supabaseAdmin.auth.admin exists:', !!supabaseAdmin.auth?.admin);
+console.log('supabaseAdmin.auth.admin.getUserByPhone exists:', typeof supabaseAdmin.auth?.admin?.getUserByPhone);
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
