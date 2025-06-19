@@ -6,6 +6,12 @@ const supabaseAdmin = createClient(
     process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+// Initialize Twilio client (THIS IS THE MISSING/MISPLACED PART)
+const twilioClient = twilio(
+    process.env.TWILIO_ACCOUNT_SID,
+    process.env.TWILIO_AUTH_TOKEN
+);
+
 // Netlify Function Handler
 exports.handler = async (event, context) => {
     // Ensure it's a POST request
