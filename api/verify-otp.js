@@ -1,208 +1,158 @@
-const { createClient } = require('@supabase/supabase-js');
-const twilio = require('twilio'); 
-// Initialize Supabase Admin client with service_role key
-const supabaseAdmin = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+import { createClient } from '@supabase/supabase-js';
 
-// Initialize Twilio client (THIS IS THE MISSING/MISPLACED PART)
-const twilioClient = twilio(
-    process.env.TWILIO_ACCOUNT_SID,
-    process.env.TWILIO_AUTH_TOKEN
-);
+// If you're using Twilio for sending OTP, ensure this is uncommented
+// and environment variables are set for TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN
+ const twilioClient = require('twilio')(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-// Netlify Function Handler
+// Supabase client initialization
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+// --- CRITICAL DEBUGGING LOGS (outside the handler to run on cold start) ---
+console.log("--- STARTING FUNCTION INIT ---");
+console.log(`Node.js Version: ${process.version}`);
+console.log("Supabase URL present:", !!supabaseUrl);
+console.log("Supabase Service Role Key present:", !!supabaseServiceRoleKey);
+
+// Initialize Supabase admin client with the service role key
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+  },
+});
+
+// --- CRITICAL DEBUGGING LOGS (inspecting the client object) ---
+console.log("supabaseAdmin object created.");
+console.log("Does supabaseAdmin.auth exist?", !!supabaseAdmin.auth);
+console.log("Does supabaseAdmin.auth.admin exist?", !!supabaseAdmin.auth.admin);
+console.log("Type of supabaseAdmin.auth.admin:", typeof supabaseAdmin.auth.admin);
+
+// This is the MOST IMPORTANT log: it will list all available methods on the admin object.
+// We are looking to see if 'getUserByPhone' is in this list.
+console.log("Methods on supabaseAdmin.auth.admin:", Object.keys(supabaseAdmin.auth.admin || {}));
+console.log("--- ENDING FUNCTION INIT ---");
+
+
 exports.handler = async (event, context) => {
-    // Ensure it's a POST request
-    if (event.httpMethod !== 'POST') {
-        return {
-            statusCode: 405,
-            body: JSON.stringify({ success: false, message: 'Method Not Allowed. Only POST requests are supported.' }),
-        };
+  // Ensure the function only accepts POST requests
+  if (event.httpMethod !== 'POST') {
+    console.log("Method Not Allowed:", event.httpMethod); // Log
+    return { statusCode: 405, body: 'Method Not Allowed' };
+  }
+
+  try {
+    const { phone, code, role } = JSON.parse(event.body);
+
+    // --- LOGS for incoming request data ---
+    console.log(`Received request for phone: ${phone}, code: ${code}, role: ${role}`);
+
+    // Verify OTP with Supabase
+    // Note: Supabase uses 'token' for the OTP code, not 'code' directly here.
+    console.log("Attempting OTP verification with Supabase...");
+    const { data, error } = await supabaseAdmin.auth.verifyOtp({
+      phone: phone,
+      token: code, // Supabase's parameter for the OTP
+      type: 'sms'
+    });
+
+    if (error) {
+      console.error("OTP Verification Error:", error.message);
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ success: false, error: error.message }),
+      };
     }
 
-    let body;
-    try {
-        // Netlify Functions provide the body as a string, parse it
-        body = JSON.parse(event.body);
-    } catch (parseError) {
-        console.error('JSON Parse Error:', parseError);
-        return {
-            statusCode: 400,
-            body: JSON.stringify({ success: false, message: 'Invalid JSON body.' }),
-        };
+    if (!data || !data.session || !data.user) {
+      console.error("No session or user data returned after OTP verification.");
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ success: false, error: 'OTP verification failed: No session or user data.' }),
+      };
     }
 
-    const { phone, code, role } = body;
+    const { session, user } = data;
+    console.log(`OTP Verified. User ID: ${user.id}, Phone: ${user.phone}`);
 
-    // Basic input validation
-    if (!phone || !code || !role) {
-        return {
-            statusCode: 400,
-            body: JSON.stringify({ success: false, message: 'Phone, code, and role are required.' }),
-        };
+    // --- CRITICAL LOG: Attempting to call getUserByPhone ---
+    console.log("Attempting to get user by phone with supabaseAdmin.auth.admin.getUserByPhone...");
+    // Check if the function exists before calling (defensive coding)
+    if (typeof supabaseAdmin.auth.admin.getUserByPhone !== 'function') {
+      const availableAdminMethods = Object.keys(supabaseAdmin.auth.admin || {});
+      console.error("CRITICAL: getUserByPhone is still NOT a function on supabaseAdmin.auth.admin.");
+      console.error("Available admin methods:", availableAdminMethods);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({
+          success: false,
+          error: "supabaseAdmin.auth.admin.getUserByPhone is not a function (runtime check)",
+          availableMethods: availableAdminMethods
+        }),
+      };
     }
 
-    try {
-        // Step 1: Verify the OTP using Twilio Verify
-        const verificationCheck = await twilioClient.verify.v2
-            .services(process.env.TWILIO_VERIFY_SERVICE_SID)
-            .verificationChecks.create({ to: phone, code: code });
 
-        if (verificationCheck.status !== 'approved') {
-            console.error('OTP verification failed:', verificationCheck.status);
-            return {
-                statusCode: 400,
-                body: JSON.stringify({ success: false, message: 'Invalid or expired OTP.' }),
-            };
-        }
+    const { data: userData, error: userError } = await supabaseAdmin.auth.admin.getUserByPhone(phone);
 
-        // Step 2: Check if user exists in Supabase Auth by phone
-        // This is the function that was causing the error previously
-        const { data: existingAuthUser, error: authUserError } = await supabaseAdmin.auth.admin.getUserByPhone(phone);
-
-        if (authUserError && authUserError.message !== 'User not found') {
-            console.error('Error fetching Supabase Auth user:', authUserError);
-            return {
-                statusCode: 500,
-                body: JSON.stringify({ success: false, error: authUserError.message }),
-            };
-        }
-
-        let user = null;
-        let idToken = null;
-
-        if (existingAuthUser?.user) {
-            // User exists in auth.users, get their ID and generate link
-            user = existingAuthUser.user;
-            console.log("Existing user found:", user.id);
-
-            const { data: linkData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
-                type: 'magiclink',
-                email: user.email, // Or use phone if email is not available/required
-                password: null, // No password needed for magiclink
-            });
-
-            if (linkError) {
-                console.error('Error generating magic link for existing user:', linkError);
-                return {
-                    statusCode: 500,
-                    body: JSON.stringify({ success: false, error: linkError.message }),
-                };
-            }
-
-            // Extract the access_token/id_token from the generated link for the frontend
-            // Note: generateLink provides a URL with a token. You might need to parse it or generate JWT directly.
-            // For a direct ID token, you'd typically need to handle session creation.
-            // For simplicity, let's assume we can obtain an ID token from the session or generate one.
-            // If the frontend needs a JWT for Supabase client, you might need to reconsider how this is passed.
-            // For now, let's assume `id_token` would be part of a successful auth flow.
-            // As a workaround, you might generate a JWT using a custom claims if needed, but that's more advanced.
-            // For typical OTP flows, the frontend would then sign in using the phone+password/code.
-            // If you only need to return data about the user, you can just return the user object.
-
-            // Given the original goal was to return an 'id_token' similar to session.access_token:
-            // For the purpose of this backend verifying OTP, if user exists, you might just return user data.
-            // If you need an actual JWT from the backend for the frontend to use `setSession`,
-            // you might need to explore `supabase.auth.signInWithOtp` on the client side after this backend call.
-            // HOWEVER, based on your previous frontend code, you were getting an 'id_token' (access_token) from backend.
-            // Let's assume for now, if the user exists, we will return some form of token or success.
-            // A common pattern is to simply confirm backend operation success and let the frontend handle `signInWithOtp`.
-
-            // For now, let's provide a dummy ID token or extract from the link if possible (complex)
-            // Or better, let the client re-authenticate with phone and the verified status.
-            // If the frontend expects an id_token, you'd typically get it after a client-side sign-in.
-            // Let's ensure the user object has the role.
-
-            // For the purpose of providing an id_token similar to a successful login:
-            // This is a complex area. Supabase's `generateLink` gives a URL to log in.
-            // To get an `id_token` (JWT) directly on the backend, you'd generally need to perform a `signInWithPassword`
-            // or other client-side equivalent that returns a session.
-            // Since we're using admin methods, let's assume the successful verification
-            // allows you to fetch/generate what you need.
-            // Let's stick to returning `user.id` and `user.phone` and `app_role` as you defined,
-            // and `id_token` will be a placeholder or derived from another flow.
-
-            // The frontend should then use supabase.auth.signInWithOtp or similar if it needs the actual session.
-            // For now, let's just confirm the user and return their app_role and a placeholder token.
-            idToken = 'placeholder_id_token_for_existing_user'; // Replace with actual logic if needed later
-            user.app_role = role; // Assign the role from input to the user object
-
-        } else {
-            // User does NOT exist, create them in auth.users
-            console.log("User not found, creating new user for phone:", phone);
-            const { data: createdUser, error: createUserError } = await supabaseAdmin.auth.admin.createUser({
-                phone: phone,
-                phone_verified: true, // Mark phone as verified since OTP passed
-                user_metadata: { app_role: role } // Store the role in user_metadata
-            });
-
-            if (createUserError) {
-                console.error('Error creating Supabase Auth user:', createUserError);
-                return {
-                    statusCode: 500,
-                    body: JSON.stringify({ success: false, error: createUserError.message }),
-                };
-            }
-
-            user = createdUser.user;
-            user.app_role = role; // Assign the role from input
-
-            // Generate a magic link for the newly created user (optional, depending on flow)
-            const { data: linkData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
-                type: 'magiclink',
-                email: user.email, // Or use phone if email is not available/required
-                password: null,
-            });
-
-            if (linkError) {
-                console.error('Error generating magic link for new user:', linkError);
-                // This is not critical for OTP success, so log but don't fail the whole response
-            }
-
-            idToken = 'placeholder_id_token_for_new_user'; // Placeholder
-        }
-
-        // Step 3: Update public.admins or public.users based on role
-        if (role === 'admin') {
-            await supabaseAdmin.from('admins').upsert({ id: user.id, phone_number: user.phone }, { onConflict: 'id' });
-        } else if (role === 'user') {
-            await supabaseAdmin.from('users').upsert({ id: user.id, phone_number: user.phone }, { onConflict: 'id' });
-        } else {
-            // Handle invalid role if necessary
-            console.warn('Invalid role provided:', role);
-        }
-
-        // Final success response
-        return {
-            statusCode: 200,
-            body: JSON.stringify({
-                success: true,
-                message: 'OTP verified successfully and user processed.',
-                id_token: idToken, // Placeholder token
-                user: {
-                    id: user.id,
-                    phone: user.phone,
-                    app_role: user.app_role,
-                    // Add other user metadata if needed
-                },
-            }),
-        };
-
-    } catch (error) {
-        console.error('An unexpected error occurred during OTP verification:', error);
-        return {
-            statusCode: 500,
-            body: JSON.stringify({ success: false, error: error.message }),
-        };
+    if (userError) {
+      console.error("Get User By Phone Error:", userError.message);
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ success: false, error: userError.message }),
+      };
     }
+
+    if (!userData || !userData.user) {
+      console.error("User data not found after getUserByPhone.");
+      return {
+        statusCode: 404,
+        body: JSON.stringify({ success: false, error: 'User not found or no user data in response.' }),
+      };
+    }
+    console.log("Successfully fetched user data with getUserByPhone:", userData.user.id);
+
+
+    // Optional: Check if a specific role is required and matches
+    const userRole = userData.user.user_metadata?.role;
+    if (role && userRole !== role) {
+      console.log(`Role mismatch: Expected ${role}, got ${userRole}`);
+      return {
+        statusCode: 403,
+        body: JSON.stringify({ success: false, error: `Unauthorized: User role is ${userRole}, expected ${role}` }),
+      };
+    }
+    console.log(`User role check: ${userRole || 'not set'}. Requested role: ${role || 'any'}.`);
+
+
+    // Return session and user information if successful
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        success: true,
+        message: 'OTP verified successfully!',
+        session: {
+          access_token: session.access_token,
+          refresh_token: session.refresh_token,
+          expires_in: session.expires_in,
+          token_type: session.token_type,
+        },
+        user: {
+          id: user.id,
+          phone: user.phone,
+          email: user.email, // Include email if available and desired
+          role: userRole || 'default', // Default role if not set
+          // Add any other relevant user_metadata fields you need
+        }
+      }),
+    };
+
+  } catch (e) {
+    // Catch any unexpected errors during function execution
+    console.error("Caught unhandled error in verify-otp:", e.message, e.stack);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ success: false, error: `Unhandled error: ${e.message}` }),
+    };
+  }
 };
-
-// IMPORTANT: This 'twilioClient' must be defined outside the handler if not already.
-// Add this if it's not present at the top of your file:
-// const twilio = require('twilio');
-// const twilioClient = twilio(
-//     process.env.TWILIO_ACCOUNT_SID,
-//     process.env.TWILIO_AUTH_TOKEN
-// );
