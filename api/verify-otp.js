@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 
 // If you're using Twilio for sending OTP, ensure this is uncommented
 // and environment variables are set for TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN
-// const twilioClient = require('twilio')(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const twilioClient = require('twilio')(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
 // Supabase client initialization
 const supabaseUrl = process.env.SUPABASE_URL;

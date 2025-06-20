@@ -1,54 +1,53 @@
-const twilio = require('twilio');
+// Example: api/send-otp.js
+import { createClient } from '@supabase/supabase-js';
+const twilioClient = require('twilio')(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-const twilioClient = twilio(
-    process.env.TWILIO_ACCOUNT_SID,
-    process.env.TWILIO_AUTH_TOKEN
-);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY; // Or PUBLIC_ANON_KEY
 
-// The main handler function for Netlify
-// It takes event, context, and callback as arguments
-exports.handler = async (event, context) => { // Renamed from module.exports
-    if (event.httpMethod !== 'POST') {
-        return {
-            statusCode: 405,
-            body: JSON.stringify({ success: false, message: 'Only POST requests allowed' })
-        };
-    }
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    // Netlify Functions parse the body automatically if it's JSON and POST
-    let body;
-    try {
-        body = JSON.parse(event.body);
-    } catch (parseError) {
-        return {
-            statusCode: 400,
-            body: JSON.stringify({ success: false, message: 'Invalid JSON body' })
-        };
-    }
+exports.handler = async (event, context) => {
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, body: 'Method Not Allowed' };
+  }
 
-    const { phone } = body;
+  try {
+    const { phone } = JSON.parse(event.body);
 
     if (!phone) {
-        return {
-            statusCode: 400,
-            body: JSON.stringify({ success: false, message: 'Phone number is required' })
-        };
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ success: false, error: 'Phone number is required.' }),
+      };
     }
 
-    try {
-        const verification = await twilioClient.verify.v2
-            .services(process.env.TWILIO_VERIFY_SERVICE_SID)
-            .verifications.create({ to: phone, channel: 'sms' });
+    // Supabase Phone Sign-in/OTP Request
+    const { data, error } = await supabase.auth.signInWithOtp({
+      phone: phone,
+      options: {
+        channel: 'sms',
+      },
+    });
 
-        return {
-            statusCode: 200,
-            body: JSON.stringify({ success: true, message: 'OTP sent successfully', sid: verification.sid })
-        };
-    } catch (error) {
-        console.error('Error sending OTP:', error);
-        return {
-            statusCode: 500,
-            body: JSON.stringify({ success: false, error: error.message })
-        };
+    if (error) {
+      console.error("Supabase OTP send error:", error.message);
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ success: false, error: error.message }),
+      };
     }
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ success: true, message: 'OTP sent successfully!' }),
+    };
+
+  } catch (e) {
+    console.error("Caught unhandled error in send-otp:", e.message, e.stack);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ success: false, error: e.message }),
+    };
+  }
 };
