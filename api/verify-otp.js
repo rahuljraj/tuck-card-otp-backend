@@ -1,6 +1,6 @@
-const twilio = require('twilio');
-const jwt = require('jsonwebtoken');
-const { createClient } = require('@supabase/supabase-js');
+import twilio from 'twilio';
+import jwt from 'jsonwebtoken';
+import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -12,7 +12,7 @@ const client = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, message: 'Only POST requests allowed' });
   }
@@ -61,7 +61,7 @@ module.exports = async (req, res) => {
       });
     }
 
-    // ✅ 4. Create access and refresh tokens
+    // ✅ 4. Create tokens
     const payload = {
       sub: user.id,
       role: 'authenticated',
@@ -91,4 +91,4 @@ module.exports = async (req, res) => {
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
   }
-};
+}

@@ -1,5 +1,3 @@
-
-
 const twilio = require('twilio');
 
 const client = twilio(
@@ -7,11 +5,15 @@ const client = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, message: 'Only POST requests allowed' });
+  }
+
   const { phone } = req.body;
 
   if (!phone) {
-    return res.status(400).json({ message: 'Phone number is required' });
+    return res.status(400).json({ success: false, message: 'Phone number is required' });
   }
 
   try {
@@ -23,4 +25,4 @@ module.exports = async (req, res) => {
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
   }
-};
+}
