@@ -1,158 +1,94 @@
-import { createClient } from '@supabase/supabase-js';
+const twilio = require('twilio');
+const jwt = require('jsonwebtoken');
+const { createClient } = require('@supabase/supabase-js');
 
-// If you're using Twilio for sending OTP, ensure this is uncommented
-// and environment variables are set for TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN
-const twilioClient = require('twilio')(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-// Supabase client initialization
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const client = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
 
-// --- CRITICAL DEBUGGING LOGS (outside the handler to run on cold start) ---
-console.log("--- STARTING FUNCTION INIT ---");
-console.log(`Node.js Version: ${process.version}`);
-console.log("Supabase URL present:", !!supabaseUrl);
-console.log("Supabase Service Role Key present:", !!supabaseServiceRoleKey);
+module.exports = async (req, res) => {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, message: 'Only POST requests allowed' });
+  }
 
-// Initialize Supabase admin client with the service role key
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
-  },
-});
+  const { phone, code, role } = req.body;
 
-// --- CRITICAL DEBUGGING LOGS (inspecting the client object) ---
-console.log("supabaseAdmin object created.");
-console.log("Does supabaseAdmin.auth exist?", !!supabaseAdmin.auth);
-console.log("Does supabaseAdmin.auth.admin exist?", !!supabaseAdmin.auth.admin);
-console.log("Type of supabaseAdmin.auth.admin:", typeof supabaseAdmin.auth.admin);
-
-// This is the MOST IMPORTANT log: it will list all available methods on the admin object.
-// We are looking to see if 'getUserByPhone' is in this list.
-console.log("Methods on supabaseAdmin.auth.admin:", Object.keys(supabaseAdmin.auth.admin || {}));
-console.log("--- ENDING FUNCTION INIT ---");
-
-
-exports.handler = async (event, context) => {
-  // Ensure the function only accepts POST requests
-  if (event.httpMethod !== 'POST') {
-    console.log("Method Not Allowed:", event.httpMethod); // Log
-    return { statusCode: 405, body: 'Method Not Allowed' };
+  if (!phone || !code || !role) {
+    return res.status(400).json({ success: false, message: 'Phone, code, and role are required' });
   }
 
   try {
-    const { phone, code, role } = JSON.parse(event.body);
+    // ✅ 1. Verify OTP with Twilio
+    const verificationCheck = await client.verify.v2
+      .services(process.env.TWILIO_VERIFY_SERVICE_SID)
+      .verificationChecks.create({ to: phone, code });
 
-    // --- LOGS for incoming request data ---
-    console.log(`Received request for phone: ${phone}, code: ${code}, role: ${role}`);
+    if (verificationCheck.status !== 'approved') {
+      return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    }
 
-    // Verify OTP with Supabase
-    // Note: Supabase uses 'token' for the OTP code, not 'code' directly here.
-    console.log("Attempting OTP verification with Supabase...");
-    const { data, error } = await supabaseAdmin.auth.verifyOtp({
-      phone: phone,
-      token: code, // Supabase's parameter for the OTP
-      type: 'sms'
+    // ✅ 2. Role-based validation
+    if (role === 'user') {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('phone_number', phone)
+        .single();
+
+      if (error || !data) {
+        return res.status(403).json({ success: false, message: 'User not pre-approved by Admin' });
+      }
+    }
+
+    // ✅ 3. Fetch the user
+    const { data: user, error: userError } = await supabase
+      .from(role === 'admin' ? 'admins' : 'users')
+      .select('*')
+      .eq('phone_number', phone)
+      .single();
+
+    if (userError || !user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found in Supabase',
+        error: userError?.message || 'Not found'
+      });
+    }
+
+    // ✅ 4. Create access and refresh tokens
+    const payload = {
+      sub: user.id,
+      role: 'authenticated',
+      phone: user.phone_number
+    };
+
+    const accessToken = jwt.sign(payload, process.env.SUPABASE_JWT_SECRET, {
+      expiresIn: '1h'
     });
 
-    if (error) {
-      console.error("OTP Verification Error:", error.message);
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ success: false, error: error.message }),
-      };
-    }
+    const refreshToken = jwt.sign(payload, process.env.SUPABASE_JWT_SECRET, {
+      expiresIn: '30d'
+    });
 
-    if (!data || !data.session || !data.user) {
-      console.error("No session or user data returned after OTP verification.");
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ success: false, error: 'OTP verification failed: No session or user data.' }),
-      };
-    }
+    // ✅ 5. Return session
+    return res.status(200).json({
+      success: true,
+      message: 'OTP verified successfully',
+      session: {
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        token_type: 'bearer'
+      },
+      user: user
+    });
 
-    const { session, user } = data;
-    console.log(`OTP Verified. User ID: ${user.id}, Phone: ${user.phone}`);
-
-    // --- CRITICAL LOG: Attempting to call getUserByPhone ---
-    console.log("Attempting to get user by phone with supabaseAdmin.auth.admin.getUserByPhone...");
-    // Check if the function exists before calling (defensive coding)
-    if (typeof supabaseAdmin.auth.admin.getUserByPhone !== 'function') {
-      const availableAdminMethods = Object.keys(supabaseAdmin.auth.admin || {});
-      console.error("CRITICAL: getUserByPhone is still NOT a function on supabaseAdmin.auth.admin.");
-      console.error("Available admin methods:", availableAdminMethods);
-      return {
-        statusCode: 500,
-        body: JSON.stringify({
-          success: false,
-          error: "supabaseAdmin.auth.admin.getUserByPhone is not a function (runtime check)",
-          availableMethods: availableAdminMethods
-        }),
-      };
-    }
-
-
-    const { data: userData, error: userError } = await supabaseAdmin.auth.admin.getUserByPhone(phone);
-
-    if (userError) {
-      console.error("Get User By Phone Error:", userError.message);
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ success: false, error: userError.message }),
-      };
-    }
-
-    if (!userData || !userData.user) {
-      console.error("User data not found after getUserByPhone.");
-      return {
-        statusCode: 404,
-        body: JSON.stringify({ success: false, error: 'User not found or no user data in response.' }),
-      };
-    }
-    console.log("Successfully fetched user data with getUserByPhone:", userData.user.id);
-
-
-    // Optional: Check if a specific role is required and matches
-    const userRole = userData.user.user_metadata?.role;
-    if (role && userRole !== role) {
-      console.log(`Role mismatch: Expected ${role}, got ${userRole}`);
-      return {
-        statusCode: 403,
-        body: JSON.stringify({ success: false, error: `Unauthorized: User role is ${userRole}, expected ${role}` }),
-      };
-    }
-    console.log(`User role check: ${userRole || 'not set'}. Requested role: ${role || 'any'}.`);
-
-
-    // Return session and user information if successful
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        success: true,
-        message: 'OTP verified successfully!',
-        session: {
-          access_token: session.access_token,
-          refresh_token: session.refresh_token,
-          expires_in: session.expires_in,
-          token_type: session.token_type,
-        },
-        user: {
-          id: user.id,
-          phone: user.phone,
-          email: user.email, // Include email if available and desired
-          role: userRole || 'default', // Default role if not set
-          // Add any other relevant user_metadata fields you need
-        }
-      }),
-    };
-
-  } catch (e) {
-    // Catch any unexpected errors during function execution
-    console.error("Caught unhandled error in verify-otp:", e.message, e.stack);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ success: false, error: `Unhandled error: ${e.message}` }),
-    };
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
   }
 };

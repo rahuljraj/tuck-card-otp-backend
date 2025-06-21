@@ -1,53 +1,26 @@
-// Example: api/send-otp.js
-import { createClient } from '@supabase/supabase-js';
-const twilioClient = require('twilio')(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY; // Or PUBLIC_ANON_KEY
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const twilio = require('twilio');
 
-exports.handler = async (event, context) => {
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: 'Method Not Allowed' };
+const client = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
+
+module.exports = async (req, res) => {
+  const { phone } = req.body;
+
+  if (!phone) {
+    return res.status(400).json({ message: 'Phone number is required' });
   }
 
   try {
-    const { phone } = JSON.parse(event.body);
+    const verification = await client.verify.v2.services(process.env.TWILIO_VERIFY_SERVICE_SID)
+      .verifications
+      .create({ to: phone, channel: 'sms' });
 
-    if (!phone) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ success: false, error: 'Phone number is required.' }),
-      };
-    }
-
-    // Supabase Phone Sign-in/OTP Request
-    const { data, error } = await supabase.auth.signInWithOtp({
-      phone: phone,
-      options: {
-        channel: 'sms',
-      },
-    });
-
-    if (error) {
-      console.error("Supabase OTP send error:", error.message);
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ success: false, error: error.message }),
-      };
-    }
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ success: true, message: 'OTP sent successfully!' }),
-    };
-
-  } catch (e) {
-    console.error("Caught unhandled error in send-otp:", e.message, e.stack);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ success: false, error: e.message }),
-    };
+    return res.status(200).json({ success: true, sid: verification.sid });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
   }
 };
