@@ -85,7 +85,9 @@ export default async function handler(req, res) {
         refresh_token: refreshToken,
         token_type: 'bearer'
       },
-      user: user
+      user: {user,
+        role:role
+      }
     });
 
   } catch (error) {
