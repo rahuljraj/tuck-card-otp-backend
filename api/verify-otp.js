@@ -1,7 +1,6 @@
+// ✅ verify-otp.js — FINAL Production-Ready API Route for Vercel (Node.js)
 import twilio from 'twilio';
-import jwt from 'jsonwebtoken';
 import { supabase } from '../utils/supabaseClient.js';
-
 
 const client = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -15,6 +14,7 @@ export default async function handler(req, res) {
   if (!phone || !code || !role) return res.status(400).json({ success: false, message: 'Missing fields' });
 
   try {
+    // ✅ 1. Verify OTP with Twilio
     const verificationCheck = await client.verify.v2
       .services(process.env.TWILIO_VERIFY_SERVICE_SID)
       .verificationChecks.create({ to: phone, code });
@@ -23,26 +23,50 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, message: 'Invalid OTP' });
     }
 
-    const table = role === 'admin' ? 'admins' : 'users';
-    const { data: user, error } = await supabase.from(table).select('*').eq('phone_number', phone).single();
-    if (error || !user) return res.status(403).json({ success: false, message: 'User not found' });
+    // ✅ 2. Check if user exists in Supabase Auth
+    const { data: existingUsers } = await supabase.auth.admin.listUsers();
+    const matchedUser = existingUsers.users.find(u => u.phone === phone);
 
-    const payload = { sub: user.id, role: 'authenticated', phone: user.phone_number };
-    const accessToken = jwt.sign(payload, process.env.SUPABASE_JWT_SECRET, { expiresIn: '1h' });
-    const refreshToken = jwt.sign(payload, process.env.SUPABASE_JWT_SECRET, { expiresIn: '30d' });
+    let userId;
+    if (!matchedUser) {
+      // ✅ 3. Create user in Supabase Auth
+      const { data: createdUser, error: createError } = await supabase.auth.admin.createUser({
+        phone,
+        phone_confirm: true,
+        user_metadata: { role }
+      });
+
+      if (createError) throw createError;
+      userId = createdUser.user.id;
+
+      // ✅ 4. Insert into `admins` or `users` table
+      const table = role === 'admin' ? 'admins' : 'users';
+      const { error: insertError } = await supabase.from(table).insert({
+        id: userId,
+        phone_number: phone
+      });
+      if (insertError) throw insertError;
+
+    } else {
+      userId = matchedUser.id;
+    }
+
+    // ✅ 5. Create Session
+    const { data: session, error: sessionError } = await supabase.auth.admin.createSession({ user_id: userId });
+    if (sessionError) throw sessionError;
 
     return res.status(200).json({
       success: true,
-      message: 'OTP verified',
-      session: {
-        access_token: accessToken,
-        refresh_token: refreshToken,
-        token_type: 'bearer'
-      },
-      user: { ...user, role }
+      message: 'OTP verified successfully',
+      session,
+      user: {
+        id: userId,
+        phone_number: phone,
+        role
+      }
     });
+
   } catch (err) {
     return res.status(500).json({ success: false, error: err.message });
   }
 }
-
