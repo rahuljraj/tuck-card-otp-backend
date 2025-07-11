@@ -1,4 +1,4 @@
-// ✅ verify-otp.js — Final Supabase Auth-Based OTP Verification + User Creation
+// ✅ verify-otp.js — Final Supabase Auth-Based OTP Verification with Session Handling
 import twilio from 'twilio';
 import { supabase } from '../utils/supabaseClient.js';
 
@@ -8,12 +8,10 @@ const client = twilio(
 );
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST')
-    return res.status(405).json({ success: false, message: 'Only POST allowed' });
+  if (req.method !== 'POST') return res.status(405).json({ success: false, message: 'Only POST allowed' });
 
   const { phone, code, role } = req.body;
-  if (!phone || !code || !role)
-    return res.status(400).json({ success: false, message: 'Missing fields' });
+  if (!phone || !code || !role) return res.status(400).json({ success: false, message: 'Missing fields' });
 
   try {
     // ✅ 1. Verify OTP with Twilio
@@ -25,12 +23,11 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, message: 'Invalid OTP' });
     }
 
-    // ✅ 2. Check if user already exists in Supabase Auth
-    const { data: allUsers } = await supabase.auth.admin.listUsers();
-    const matchedUser = allUsers.users.find(u => u.phone === phone);
+    // ✅ 2. Check if user exists in Supabase Auth
+    const { data: existingUsers } = await supabase.auth.admin.listUsers();
+    const matchedUser = existingUsers.users.find(u => u.phone === phone);
 
     let userId;
-
     if (!matchedUser) {
       // ✅ 3. Create user in Supabase Auth
       const { data: createdUser, error: createError } = await supabase.auth.admin.createUser({
@@ -38,30 +35,28 @@ export default async function handler(req, res) {
         phone_confirm: true,
         user_metadata: { role }
       });
-
       if (createError) throw createError;
       userId = createdUser.user.id;
 
-      // ✅ 4. Insert into correct table (admins/users)
+      // ✅ 4. Insert into `admins` or `users` table
       const table = role === 'admin' ? 'admins' : 'users';
       const { error: insertError } = await supabase.from(table).insert({
         id: userId,
         phone_number: phone
       });
-
       if (insertError) throw insertError;
 
     } else {
       userId = matchedUser.id;
     }
 
-    // ✅ 5. Create session using Supabase Admin API
+    // ✅ 5. Create Session
     const { data: session, error: sessionError } = await supabase.auth.admin.createSession({ user_id: userId });
     if (sessionError) throw sessionError;
 
     return res.status(200).json({
       success: true,
-      message: 'OTP verified and session created',
+      message: 'OTP verified successfully',
       session,
       user: {
         id: userId,
