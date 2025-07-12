@@ -56,8 +56,12 @@ export default async function handler(req, res) {
       });
 
       if (insertError) {
-       console.error('❌ Supabase insert error:', insertError); // ← log actual error
-  return res.status(500).json({ success: false, error: 'Database error creating new user: ' + insertError.message });
+  console.error('❌ Insert Error (Supabase):', insertError);
+  return res.status(500).json({
+    success: false,
+    error: 'Database error creating new user',
+    details: insertError.details || insertError.message || insertError
+  });
 }
 
     } else {
