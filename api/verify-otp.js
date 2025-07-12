@@ -56,7 +56,8 @@ export default async function handler(req, res) {
 });
 
 if (insertError) {
-  console.error('❌ Supabase Insert Error:', insertError);
+  console.error('🔴 FULL SUPABASE INSERT ERROR:', JSON.stringify(insertError, null, 2));
+
   return res.status(500).json({
     success: false,
     error: 'Insert error',
