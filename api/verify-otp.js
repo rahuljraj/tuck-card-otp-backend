@@ -50,19 +50,20 @@ export default async function handler(req, res) {
 
       // ✅ 4. Insert user into role-based table
       const table = role === 'admin' ? 'admins' : 'users';
-      const { error: insertError } = await supabase.from(table).insert({
-        id: userId,
-        phone_number: phone
-      });
+     const { error: insertError } = await supabase.from(table).insert({
+  id: userId,
+  phone_number: phone
+});
 
-      if (insertError) {
-  console.error('❌ Insert Error (Supabase):', insertError);
+if (insertError) {
+  console.error('❌ Supabase Insert Error:', insertError);
   return res.status(500).json({
     success: false,
-    error: 'Database error creating new user',
-    details: insertError.details || insertError.message || insertError
+    error: 'Insert error',
+    supabase_error: insertError
   });
 }
+
 
     } else {
       userId = matchedUser.id;
