@@ -8,13 +8,17 @@ const client = twilio(
 );
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ success: false, message: 'Only POST allowed' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, message: 'Only POST allowed' });
+  }
 
   const { phone, code, role } = req.body;
-  if (!phone || !code || !role) return res.status(400).json({ success: false, message: 'Missing fields' });
+  if (!phone || !code || !role) {
+    return res.status(400).json({ success: false, message: 'Missing fields' });
+  }
 
   try {
-    // ✅ 1. Verify OTP with Twilio
+    // ✅ 1. Verify OTP via Twilio
     const verificationCheck = await client.verify.v2
       .services(process.env.TWILIO_VERIFY_SERVICE_SID)
       .verificationChecks.create({ to: phone, code });
@@ -23,11 +27,12 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, message: 'Invalid OTP' });
     }
 
-    // ✅ 2. Check if user exists in Supabase Auth
+    // ✅ 2. Check if user already exists in Supabase Auth
     const { data: existingUsers } = await supabase.auth.admin.listUsers();
     const matchedUser = existingUsers.users.find(u => u.phone === phone);
 
     let userId;
+
     if (!matchedUser) {
       // ✅ 3. Create user in Supabase Auth
       const { data: createdUser, error: createError } = await supabase.auth.admin.createUser({
@@ -35,33 +40,44 @@ export default async function handler(req, res) {
         phone_confirm: true,
         user_metadata: { role }
       });
-      if (createError) throw createError;
+
+      if (createError) {
+        console.error('❌ Supabase Auth Create Error:', createError.message || createError);
+        throw createError;
+      }
+
       userId = createdUser.user.id;
 
-      // ✅ 4. Insert into `admins` or `users` table
+      // ✅ 4. Insert user into role-based table
       const table = role === 'admin' ? 'admins' : 'users';
       const { error: insertError } = await supabase.from(table).insert({
         id: userId,
         phone_number: phone
       });
-      if (insertError) {
-  console.error('❌ Insert Error (Supabase):', insertError.message || insertError);
-  return res.status(500).json({ success: false, error: 'Database error creating new user: ' + insertError.message });
-}
 
+      if (insertError) {
+        console.error('❌ Insert Error (Supabase):', insertError.message || insertError);
+        return res.status(500).json({
+          success: false,
+          error: 'Database error creating new user: ' + String(insertError)
+        });
+      }
 
     } else {
       userId = matchedUser.id;
     }
 
-    // ✅ 5. Create Session
-    const { data: session, error: sessionError } = await supabase.auth.admin.createSession({ user_id: userId });
-    if (createError) {
-  console.error('❌ Supabase Auth Create Error:', createError.message || createError);
-  throw createError;
-}
+    // ✅ 5. Create session
+    const { data: session, error: sessionError } = await supabase.auth.admin.createSession({
+      user_id: userId
+    });
 
+    if (sessionError) {
+      console.error('❌ Session Creation Error:', sessionError.message || sessionError);
+      throw sessionError;
+    }
 
+    // ✅ Done
     return res.status(200).json({
       success: true,
       message: 'OTP verified successfully',
@@ -74,6 +90,7 @@ export default async function handler(req, res) {
     });
 
   } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
+    console.error('❌ Final Error:', err.message || err);
+    return res.status(500).json({ success: false, error: err.message || 'Unknown error' });
   }
 }
