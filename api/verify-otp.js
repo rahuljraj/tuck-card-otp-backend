@@ -44,7 +44,11 @@ export default async function handler(req, res) {
         id: userId,
         phone_number: phone
       });
-      if (insertError) throw insertError;
+      if (insertError) {
+  console.error('❌ Insert Error (Supabase):', insertError.message || insertError);
+  return res.status(500).json({ success: false, error: 'Database error creating new user: ' + insertError.message });
+}
+
 
     } else {
       userId = matchedUser.id;
@@ -52,7 +56,11 @@ export default async function handler(req, res) {
 
     // ✅ 5. Create Session
     const { data: session, error: sessionError } = await supabase.auth.admin.createSession({ user_id: userId });
-    if (sessionError) throw sessionError;
+    if (createError) {
+  console.error('❌ Supabase Auth Create Error:', createError.message || createError);
+  throw createError;
+}
+
 
     return res.status(200).json({
       success: true,
