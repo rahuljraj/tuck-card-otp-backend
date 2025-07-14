@@ -52,8 +52,10 @@ export default async function handler(req, res) {
       const table = role === 'admin' ? 'admins' : 'users';
      const { error: insertError } = await supabase.from(table).insert({
   id: userId,
-  phone_number: phone
+  phone_number: phone,
+  transaction_pin: '0000' // ✅ required to avoid insert failure
 });
+
 
 if (insertError) {
   console.error('🔴 FULL SUPABASE INSERT ERROR:', JSON.stringify(insertError, null, 2));
