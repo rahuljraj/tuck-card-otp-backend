@@ -1,4 +1,4 @@
-// ✅ verify-otp.js — Final Supabase Auth-Based OTP Verification with Session Handling
+// ✅ verify-otp.js — Supabase OTP + Session Flow
 import twilio from 'twilio';
 import { supabase } from '../utils/supabaseClient.js';
 
@@ -8,17 +8,13 @@ const client = twilio(
 );
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, message: 'Only POST allowed' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ success: false, message: 'Only POST allowed' });
 
   const { phone, code, role } = req.body;
-  if (!phone || !code || !role) {
-    return res.status(400).json({ success: false, message: 'Missing fields' });
-  }
+  if (!phone || !code || !role) return res.status(400).json({ success: false, message: 'Missing fields' });
 
   try {
-    // ✅ 1. Verify OTP via Twilio
+    // 1. Verify OTP
     const verificationCheck = await client.verify.v2
       .services(process.env.TWILIO_VERIFY_SERVICE_SID)
       .verificationChecks.create({ to: phone, code });
@@ -27,62 +23,42 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, message: 'Invalid OTP' });
     }
 
-    // ✅ 2. Check if user already exists in Supabase Auth
+    // 2. Check if already exists
     const { data: existingUsers } = await supabase.auth.admin.listUsers();
     const matchedUser = existingUsers.users.find(u => u.phone === phone);
-
     let userId;
 
     if (!matchedUser) {
-      // ✅ 3. Create user in Supabase Auth
+      // 3. Create Auth User
       const { data: createdUser, error: createError } = await supabase.auth.admin.createUser({
         phone,
         phone_confirm: true,
         user_metadata: { role }
       });
 
-      if (createError) {
-        console.error('❌ Supabase Auth Create Error:', createError.message || createError);
-        throw createError;
-      }
-
+      if (createError) throw createError;
       userId = createdUser.user.id;
 
-      // ✅ 4. Insert user into role-based table
+      // 4. Insert into role table
       const table = role === 'admin' ? 'admins' : 'users';
-     const { error: insertError } = await supabase.from(table).insert({
-  id: userId,
-  phone_number: phone,
-  transaction_pin: '0000' // ✅ required to avoid insert failure
-});
+      const { error: insertError } = await supabase.from(table).insert({
+        id: userId,
+        phone_number: phone,
+        transaction_pin: '0000'
+      });
 
-
-if (insertError) {
-  console.error('🔴 FULL SUPABASE INSERT ERROR:', JSON.stringify(insertError, null, 2));
-
-  return res.status(500).json({
-    success: false,
-    error: 'Insert error',
-    supabase_error: insertError
-  });
-}
-
-
+      if (insertError) throw insertError;
     } else {
       userId = matchedUser.id;
     }
 
-    // ✅ 5. Create session
+    // 5. Create Session
     const { data: session, error: sessionError } = await supabase.auth.admin.createSession({
       user_id: userId
     });
 
-    if (sessionError) {
-      console.error('❌ Session Creation Error:', sessionError.message || sessionError);
-      throw sessionError;
-    }
+    if (sessionError) throw sessionError;
 
-    // ✅ Done
     return res.status(200).json({
       success: true,
       message: 'OTP verified successfully',
@@ -93,7 +69,6 @@ if (insertError) {
         role
       }
     });
-
   } catch (err) {
     console.error('❌ Final Error:', err.message || err);
     return res.status(500).json({ success: false, error: err.message || 'Unknown error' });
