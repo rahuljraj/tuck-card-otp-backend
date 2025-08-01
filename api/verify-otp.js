@@ -8,10 +8,12 @@ const client = twilio(
 );
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ success: false, message: 'Only POST allowed' });
+  if (req.method !== 'POST')
+    return res.status(405).json({ success: false, message: 'Only POST allowed' });
 
   const { phone, code, role } = req.body;
-  if (!phone || !code || !role) return res.status(400).json({ success: false, message: 'Missing fields' });
+  if (!phone || !code || !role)
+    return res.status(400).json({ success: false, message: 'Missing fields' });
 
   try {
     // 1. Verify OTP
@@ -23,7 +25,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, message: 'Invalid OTP' });
     }
 
-    // 2. Check if already exists
+    // 2. Check if already exists in Supabase Auth
     const { data: existingUsers } = await supabase.auth.admin.listUsers();
     const matchedUser = existingUsers.users.find(u => u.phone === phone);
     let userId;
@@ -38,9 +40,19 @@ export default async function handler(req, res) {
 
       if (createError) throw createError;
       userId = createdUser.user.id;
+    } else {
+      userId = matchedUser.id;
+    }
 
-      // 4. Insert into role table
-      const table = role === 'admin' ? 'admins' : 'users';
+    // ✅ 4. Insert into role table (only if not already exists)
+    const table = role === 'admin' ? 'admins' : 'users';
+    const { data: existingRecord } = await supabase
+      .from(table)
+      .select('id')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (!existingRecord) {
       const { error: insertError } = await supabase.from(table).insert({
         id: userId,
         phone_number: phone,
@@ -48,8 +60,6 @@ export default async function handler(req, res) {
       });
 
       if (insertError) throw insertError;
-    } else {
-      userId = matchedUser.id;
     }
 
     // 5. Create Session
@@ -69,6 +79,7 @@ export default async function handler(req, res) {
         role
       }
     });
+
   } catch (err) {
     console.error('❌ Final Error:', err.message || err);
     return res.status(500).json({ success: false, error: err.message || 'Unknown error' });
