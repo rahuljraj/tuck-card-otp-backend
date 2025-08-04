@@ -16,7 +16,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, message: 'Missing fields' });
 
   try {
-    // ✅ 1. Verify OTP via Twilio
+    // ✅ 1. Verify OTP
     const verificationCheck = await client.verify.v2
       .services(process.env.TWILIO_VERIFY_SERVICE_SID)
       .verificationChecks.create({ to: phone, code });
@@ -41,10 +41,16 @@ export default async function handler(req, res) {
       });
 
       if (createError) {
-        // ⚠️ If already exists, reuse the existing user
+        // 🔐 Handle duplicate user creation attempt
         if (createError.message.includes('already registered')) {
           matchedUser = existingUsers.users.find(u => u.phone === phone);
-          userId = matchedUser?.id;
+          if (!matchedUser) {
+            return res.status(400).json({
+              success: false,
+              message: 'Phone already registered but user not found in Auth list'
+            });
+          }
+          userId = matchedUser.id;
         } else {
           throw createError;
         }
@@ -56,7 +62,15 @@ export default async function handler(req, res) {
       userId = matchedUser.id;
     }
 
-    // ✅ 4. Insert into admins or users table if not already present
+    // ✅ Final safety check
+    if (!userId) {
+      return res.status(500).json({
+        success: false,
+        message: 'User ID could not be resolved'
+      });
+    }
+
+    // ✅ 4. Insert into role table (admins or users)
     const table = role === 'admin' ? 'admins' : 'users';
 
     const { data: existingRecord, error: checkError } = await supabase
@@ -90,7 +104,6 @@ export default async function handler(req, res) {
       return res.status(500).json({ success: false, message: 'Failed to create session' });
     }
 
-    // ✅ Return session + user details
     return res.status(200).json({
       success: true,
       message: 'OTP verified successfully',
@@ -104,10 +117,6 @@ export default async function handler(req, res) {
 
   } catch (err) {
     console.error('❌ Final Error:', err.message || err);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      error: err.message || 'Unknown error'
-    });
+    return res.status(500).json({ success: false, message: 'Internal server error', error: err.message || 'Unknown error' });
   }
 }
