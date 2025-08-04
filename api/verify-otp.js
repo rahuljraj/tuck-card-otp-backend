@@ -49,7 +49,7 @@ export default async function handler(req, res) {
     const { data: existingRecord } = await supabase
       .from(table)
       .select('id')
-      .eq('id', userId)
+      .or(`id.eq.${userId},phone_number.eq.${phone}`) 
       .maybeSingle();
 
     if (!existingRecord) {
