@@ -16,7 +16,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, message: 'Missing fields' });
 
   try {
-    // 1. Verify OTP
+    // ✅ 1. Verify OTP
     const verificationCheck = await client.verify.v2
       .services(process.env.TWILIO_VERIFY_SERVICE_SID)
       .verificationChecks.create({ to: phone, code });
@@ -25,13 +25,15 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, message: 'Invalid OTP' });
     }
 
-    // 2. Check if already exists in Supabase Auth
-    const { data: existingUsers } = await supabase.auth.admin.listUsers();
-    const matchedUser = existingUsers.users.find(u => u.phone === phone);
+    // ✅ 2. Check if user exists in Supabase Auth
+    const { data: existingUsers, error: listError } = await supabase.auth.admin.listUsers();
+    if (listError) throw listError;
+
+    let matchedUser = existingUsers.users.find(u => u.phone === phone);
     let userId;
 
     if (!matchedUser) {
-      // 3. Create Auth User
+      // ✅ 3. Create Auth User
       const { data: createdUser, error: createError } = await supabase.auth.admin.createUser({
         phone,
         phone_confirm: true,
@@ -40,17 +42,21 @@ export default async function handler(req, res) {
 
       if (createError) throw createError;
       userId = createdUser.user.id;
+      matchedUser = createdUser.user;
     } else {
       userId = matchedUser.id;
     }
 
-    // ✅ 4. Insert into role table (only if not already exists)
+    // ✅ 4. Check and insert into role table (admins or users)
     const table = role === 'admin' ? 'admins' : 'users';
-    const { data: existingRecord } = await supabase
+
+    const { data: existingRecord, error: checkError } = await supabase
       .from(table)
       .select('id')
-      .or(`id.eq.${userId},phone_number.eq.${phone}`) 
+      .eq('id', userId)
       .maybeSingle();
+
+    if (checkError) throw checkError;
 
     if (!existingRecord) {
       const { error: insertError } = await supabase.from(table).insert({
@@ -59,15 +65,21 @@ export default async function handler(req, res) {
         transaction_pin: '0000'
       });
 
-      if (insertError) throw insertError;
+      if (insertError) {
+        console.error('Insert error:', insertError.message);
+        return res.status(500).json({ success: false, message: 'Failed to insert user record' });
+      }
     }
 
-    // 5. Create Session
+    // ✅ 5. Create Session
     const { data: session, error: sessionError } = await supabase.auth.admin.createSession({
       user_id: userId
     });
 
-    if (sessionError) throw sessionError;
+    if (sessionError) {
+      console.error('Session Error:', sessionError.message);
+      return res.status(500).json({ success: false, message: 'Failed to create session' });
+    }
 
     return res.status(200).json({
       success: true,
